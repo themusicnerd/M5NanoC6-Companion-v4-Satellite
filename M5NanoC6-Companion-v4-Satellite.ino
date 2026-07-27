@@ -1,6 +1,6 @@
 /*
  * M5NanoC6 Companion v4 Satellite
- * Version 0.1.4
+ * Version 0.1.5
  *
  * Wi-Fi Companion satellite, button, full-range WS2812 RGB tally and NEC IR.
  * The ESP32-C6 802.15.4 capabilities are reported by the REST API so future
@@ -18,7 +18,7 @@
 #include <esp_mac.h>
 #include <esp32-hal-rmt.h>
 
-#define FIRMWARE_VERSION "0.1.4"
+#define FIRMWARE_VERSION "0.1.5"
 #define BUTTON_PIN 9
 #define IR_TX_PIN 3
 #define RGB_POWER_PIN 19
@@ -40,6 +40,7 @@ bool tallyActive = false;
 bool companionConnected = false;
 bool buttonDown = false;
 bool configPortalActive = false;
+bool mdnsStarted = false;
 unsigned long lastConnectTry = 0;
 unsigned long lastPing = 0;
 unsigned long lastLedFrame = 0;
@@ -130,6 +131,55 @@ static void postSettings() {
     renderLed();
   }
   sendSettings();
+}
+
+static String requestValue(const char *key) {
+  String body = server.arg("plain");
+  body.trim();
+  if (body.startsWith("{")) return jsonValue(body, key);
+  return body;
+}
+
+static void getHost() {
+  server.send(200, "text/plain", companionHost);
+}
+
+static void getPort() {
+  server.send(200, "text/plain", companionPort);
+}
+
+static void getConfig() {
+  server.send(200, "application/json",
+    "{\"host\":\"" + String(companionHost) + "\",\"port\":" + String(companionPort) + "}");
+}
+
+static void postHost() {
+  String value = requestValue("host");
+  value.trim();
+  if (!value.length() || value.length() >= sizeof(companionHost)) {
+    server.send(400, "text/plain", "Invalid host");
+    return;
+  }
+  strlcpy(companionHost, value.c_str(), sizeof(companionHost));
+  if (portalHost) portalHost->setValue(companionHost, sizeof(companionHost));
+  saveSettings();
+  companionClient.stop();
+  server.send(200, "text/plain", "OK");
+}
+
+static void postPort() {
+  String value = requestValue("port");
+  value.trim();
+  const long port = value.toInt();
+  if (port < 1 || port > 65535) {
+    server.send(400, "text/plain", "Invalid port");
+    return;
+  }
+  snprintf(companionPort, sizeof(companionPort), "%ld", port);
+  if (portalPort) portalPort->setValue(companionPort, sizeof(companionPort));
+  saveSettings();
+  companionClient.stop();
+  server.send(200, "text/plain", "OK");
 }
 
 static void initIr() {
@@ -233,6 +283,11 @@ static void sendStatus() {
 
 static void setupServer() {
   server.on("/", HTTP_GET, configPage);
+  server.on("/api/host", HTTP_GET, getHost);
+  server.on("/api/host", HTTP_POST, postHost);
+  server.on("/api/port", HTTP_GET, getPort);
+  server.on("/api/port", HTTP_POST, postPort);
+  server.on("/api/config", HTTP_GET, getConfig);
   server.on("/api/settings", HTTP_GET, sendSettings);
   server.on("/api/status", HTTP_GET, sendStatus);
   server.on("/api/settings", HTTP_POST, postSettings);
@@ -273,6 +328,36 @@ static void startConfigPortal() {
 
 static String companionSurfaceID() {
   return "m5nano-c6:" + deviceID.substring(deviceID.length() - 5);
+}
+
+static void ensureMDNS() {
+  if (mdnsStarted || WiFi.status() != WL_CONNECTED) return;
+
+  const String shortId = deviceID.substring(deviceID.length() - 5);
+  String hostname = "m5nano-c6-" + shortId;
+  hostname.toLowerCase();
+  const String instanceName = "m5nano-c6:" + shortId;
+
+  if (!MDNS.begin(hostname.c_str())) {
+    Serial.println("[mDNS] Failed to start responder");
+    return;
+  }
+
+  MDNS.setInstanceName(instanceName);
+  if (!MDNS.addService("companion-satellite", "tcp", 9999)) {
+    Serial.println("[mDNS] Failed to advertise companion-satellite service");
+    MDNS.end();
+    return;
+  }
+
+  MDNS.addServiceTxt("companion-satellite", "tcp", "restEnabled", "true");
+  MDNS.addServiceTxt("companion-satellite", "tcp", "deviceId", shortId.c_str());
+  MDNS.addServiceTxt("companion-satellite", "tcp", "prefix", "m5nano-c6");
+  MDNS.addServiceTxt("companion-satellite", "tcp", "productName", "M5NanoC6");
+  MDNS.addServiceTxt("companion-satellite", "tcp", "apiVersion", "4");
+  mdnsStarted = true;
+  Serial.printf("[mDNS] Discovery ready: %s.local (%s)\n",
+    hostname.c_str(), instanceName.c_str());
 }
 
 static void sendDeviceAdd() {
@@ -356,8 +441,9 @@ void setup() {
 
   ArduinoOTA.setHostname(deviceID.c_str());
   ArduinoOTA.setPassword("companion-satellite");
+  // Discovery mDNS is started after Wi-Fi connects by ensureMDNS().
+  ArduinoOTA.setMdnsEnabled(false);
   ArduinoOTA.begin();
-  MDNS.begin(deviceID.c_str());
   setupServer();
   renderLed();
 }
@@ -372,6 +458,7 @@ void loop() {
   }
   server.handleClient();
   ArduinoOTA.handle();
+  ensureMDNS();
   connectCompanion();
   updateLedAnimation();
 

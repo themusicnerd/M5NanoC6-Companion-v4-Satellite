@@ -5,7 +5,7 @@ project_dir="$(cd "$(dirname "$0")" && pwd)"
 build_dir="$project_dir/build/m5stack.esp32.m5stack_nano_c6"
 release_dir="$project_dir/release"
 sketch="M5NanoC6-Companion-v4-Satellite.ino"
-version="0.1.4"
+version="0.1.5"
 
 mkdir -p "$build_dir" "$release_dir"
 arduino-cli compile \
