@@ -1,6 +1,6 @@
 /*
  * M5NanoC6 Companion v4 Satellite
- * Version 0.1.5
+ * Version 0.1.6
  *
  * Wi-Fi Companion satellite, button, full-range WS2812 RGB tally and NEC IR.
  * The ESP32-C6 802.15.4 capabilities are reported by the REST API so future
@@ -18,7 +18,7 @@
 #include <esp_mac.h>
 #include <esp32-hal-rmt.h>
 
-#define FIRMWARE_VERSION "0.1.5"
+#define FIRMWARE_VERSION "0.1.6"
 #define BUTTON_PIN 9
 #define IR_TX_PIN 3
 #define RGB_POWER_PIN 19
@@ -182,6 +182,31 @@ static void postPort() {
   server.send(200, "text/plain", "OK");
 }
 
+static void postConfig() {
+  const String body = server.arg("plain");
+  String host = jsonValue(body, "host");
+  String portValue = jsonValue(body, "port");
+  host.trim();
+  portValue.trim();
+  const long port = portValue.toInt();
+
+  if (!host.length() || host.length() >= sizeof(companionHost) ||
+      port < 1 || port > 65535) {
+    server.send(400, "text/plain", "Invalid config");
+    return;
+  }
+
+  strlcpy(companionHost, host.c_str(), sizeof(companionHost));
+  snprintf(companionPort, sizeof(companionPort), "%ld", port);
+  if (portalHost) portalHost->setValue(companionHost, sizeof(companionHost));
+  if (portalPort) portalPort->setValue(companionPort, sizeof(companionPort));
+  saveSettings();
+  companionClient.stop();
+  Serial.printf("[REST] Companion config updated: %s:%s\n",
+    companionHost, companionPort);
+  server.send(200, "text/plain", "OK");
+}
+
 static void initIr() {
   rmtInit(IR_TX_PIN, RMT_TX_MODE, RMT_MEM_NUM_BLOCKS_2, 1000000);
   rmtSetCarrier(IR_TX_PIN, true, LOW, 38000, 0.33);
@@ -288,6 +313,7 @@ static void setupServer() {
   server.on("/api/port", HTTP_GET, getPort);
   server.on("/api/port", HTTP_POST, postPort);
   server.on("/api/config", HTTP_GET, getConfig);
+  server.on("/api/config", HTTP_POST, postConfig);
   server.on("/api/settings", HTTP_GET, sendSettings);
   server.on("/api/status", HTTP_GET, sendStatus);
   server.on("/api/settings", HTTP_POST, postSettings);

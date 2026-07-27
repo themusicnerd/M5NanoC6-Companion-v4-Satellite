@@ -1,9 +1,9 @@
 # M5NanoC6 Companion v4 Satellite
 
-Version 0.1.5 firmware for using the M5Stack NanoC6 as a one-button Bitfocus
+Version 0.1.6 firmware for using the M5Stack NanoC6 as a one-button Bitfocus
 Companion v4 satellite.
 
-## Included in v0.1.5
+## Included in v0.1.6
 
 - Companion single-button surface (`KEY-PRESS`, `KEY-RELEASE`, RGB colour and brightness)
 - Full 0–255 WS2812 colour range; no Atom Matrix brightness safety cap
@@ -21,7 +21,7 @@ explicitly rather than implying that a radio network is active.
 
 ## Install
 
-Use `release/M5NanoC6-Companion-v4-Satellite-v0.1.5-factory.bin` for the first USB
+Use `release/M5NanoC6-Companion-v4-Satellite-v0.1.6-factory.bin` for the first USB
 installation. Hold the GPIO9 button while connecting USB-C to enter download
 mode.
 
@@ -70,6 +70,7 @@ The companion-module-m5-satellites module includes matching actions.
 - `GET /api/settings` — firmware, brightness, IR and radio capability state
 - `POST /api/settings` — `{"brightness":100}`
 - `GET/POST /api/host` and `/api/port` — Companion discovery configuration
+- `GET/POST /api/config` — combined Companion host and port configuration
 - `POST /api/ir/nec` — `{"address":"0x00FF","command":"0x20DF","repeats":0}`
 - `GET /api/radio` — radio capability/profile state
 
