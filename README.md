@@ -1,9 +1,9 @@
 # M5NanoC6 Companion v4 Satellite
 
-Version 0.1.2 firmware for using the M5Stack NanoC6 as a one-button Bitfocus
+Version 0.1.3 firmware for using the M5Stack NanoC6 as a one-button Bitfocus
 Companion v4 satellite.
 
-## Included in v0.1.2
+## Included in v0.1.3
 
 - Companion single-button surface (`KEY-PRESS`, `KEY-RELEASE`, RGB colour and brightness)
 - Full 0–255 WS2812 colour range; no Atom Matrix brightness safety cap
@@ -20,7 +20,7 @@ explicitly rather than implying that a radio network is active.
 
 ## Install
 
-Use `release/M5NanoC6-Companion-v4-Satellite-v0.1.2-factory.bin` for the first USB
+Use `release/M5NanoC6-Companion-v4-Satellite-v0.1.3-factory.bin` for the first USB
 installation. Hold the GPIO9 button while connecting USB-C to enter download
 mode.
 
@@ -56,9 +56,10 @@ incoming colour, and other troubleshooting data. It refreshes every two seconds.
 - Green means connected and waiting for tally data.
 - When connected, an incoming Companion colour becomes the LED tally colour.
 
-To open setup mode, hold the button for five seconds during the first 60
-seconds after boot. The firmware never opens an AP automatically, and holding
-the button after the first minute remains a normal Companion button press.
+To open setup mode, hold the button while powering on or restarting the
+NanoC6, matching the AtomS3 boot-menu gesture. The firmware never opens an AP
+automatically. Once normal boot has started, the button is only a Companion
+surface button.
 
 ## Companion control API
 

@@ -1,6 +1,6 @@
 /*
  * M5NanoC6 Companion v4 Satellite
- * Version 0.1.2
+ * Version 0.1.3
  *
  * Wi-Fi Companion satellite, button, full-range WS2812 RGB tally and NEC IR.
  * The ESP32-C6 802.15.4 capabilities are reported by the REST API so future
@@ -18,7 +18,7 @@
 #include <esp_mac.h>
 #include <esp32-hal-rmt.h>
 
-#define FIRMWARE_VERSION "0.1.2"
+#define FIRMWARE_VERSION "0.1.3"
 #define BUTTON_PIN 9
 #define IR_TX_PIN 3
 #define RGB_POWER_PIN 19
@@ -39,19 +39,13 @@ uint8_t tallyR = 0, tallyG = 0, tallyB = 0;
 bool tallyActive = false;
 bool companionConnected = false;
 bool buttonDown = false;
-bool holdHandled = false;
 bool configPortalActive = false;
-unsigned long buttonStarted = 0;
-unsigned long bootStarted = 0;
 unsigned long lastConnectTry = 0;
 unsigned long lastPing = 0;
 unsigned long lastLedFrame = 0;
 String receiveLine;
 WiFiManagerParameter *portalHost = nullptr;
 WiFiManagerParameter *portalPort = nullptr;
-
-const unsigned long apHoldMs = 5000;
-const unsigned long apBootWindowMs = 60000;
 
 static uint8_t scaleChannel(uint8_t value) {
   return (uint16_t(value) * constrain(brightness, 0, 100)) / 100;
@@ -238,7 +232,6 @@ static void sendStatus() {
     ",\"g\":" + String(tallyG) + ",\"b\":" + String(tallyB) + "},";
   body += "\"buttonPressed\":" + String(buttonDown ? "true" : "false") +
     ",\"setupMode\":" + String(configPortalActive ? "true" : "false") +
-    ",\"setupWindowOpen\":" + String(millis() - bootStarted <= apBootWindowMs ? "true" : "false") +
     ",\"uptimeSeconds\":" + String(millis() / 1000) + "}";
   server.send(200, "application/json", body);
 }
@@ -336,7 +329,6 @@ static void connectCompanion() {
 
 void setup() {
   Serial.begin(115200);
-  bootStarted = millis();
   pinMode(BUTTON_PIN, INPUT_PULLUP);
   pinMode(RGB_POWER_PIN, OUTPUT);
   digitalWrite(RGB_POWER_PIN, HIGH);
@@ -360,7 +352,8 @@ void setup() {
   preferences.end();
 
   WiFi.mode(WIFI_STA);
-  WiFi.begin();
+  if (digitalRead(BUTTON_PIN) == LOW) startConfigPortal();
+  else WiFi.begin();
   renderLed();
 
   ArduinoOTA.setHostname(deviceID.c_str());
@@ -403,23 +396,12 @@ void loop() {
   bool pressed = digitalRead(BUTTON_PIN) == LOW;
   if (pressed && !buttonDown) {
     buttonDown = true;
-    holdHandled = false;
-    buttonStarted = millis();
     if (companionClient.connected()) companionClient.println(
       "KEY-PRESS DEVICEID=" + companionSurfaceID() + " KEY=0 PRESSED=true");
   }
-  const bool setupWindowOpen = millis() - bootStarted <= apBootWindowMs;
-  if (pressed && !holdHandled && setupWindowOpen &&
-      millis() - buttonStarted >= apHoldMs) {
-    holdHandled = true;
-    if (companionClient.connected()) companionClient.println(
-      "KEY-PRESS DEVICEID=" + companionSurfaceID() + " KEY=0 PRESSED=false");
-    companionClient.stop();
-    startConfigPortal();
-  }
   if (!pressed && buttonDown) {
     buttonDown = false;
-    if (!holdHandled && companionClient.connected())
+    if (companionClient.connected())
       companionClient.println(
         "KEY-PRESS DEVICEID=" + companionSurfaceID() + " KEY=0 PRESSED=false");
   }
