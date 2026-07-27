@@ -185,14 +185,34 @@ static void updateResult() {
 
 static void configPage() {
   server.send(200, "text/html",
-    "<!doctype html><meta name=viewport content='width=device-width'><h1>" + deviceID + "</h1>"
-    "<p>Firmware v" FIRMWARE_VERSION "</p><p>Companion: " + String(companionHost) + ":" + String(companionPort) +
-    "</p><p><a href=/update>Firmware update</a></p>");
+    "<!doctype html><meta name=viewport content='width=device-width'><title>M5NanoC6</title>"
+    "<h1>M5NanoC6 Companion Satellite</h1><p>Device ID: <code>" + deviceID + "</code></p>"
+    "<p>Firmware v" FIRMWARE_VERSION "</p><h3>Live troubleshooting status</h3><div id=s>Loading...</div>"
+    "<p>Incoming text: <code id=t>(not supported)</code></p>"
+    "<p>Incoming colour: <span id=w style='display:inline-block;width:2em;height:1em;border:1px solid'></span> <code id=c>-</code></p>"
+    "<p><a href=/update>Firmware update</a></p><pre id=j></pre><script>async function u(){try{let x=await(await fetch('/api/status')).json();"
+    "s.textContent=(x.networkConnected?'Network connected':'Network disconnected')+' | '+(x.companionConnected?'Companion connected':'Companion disconnected')+' | '+x.ip;"
+    "let q=x.color;c.textContent=`rgb(${q.r}, ${q.g}, ${q.b})`;w.style.background=`rgb(${q.r},${q.g},${q.b})`;j.textContent=JSON.stringify(x,null,2)"
+    "}catch(e){s.textContent='Status unavailable'}}u();setInterval(u,2000)</script>");
+}
+
+static void sendStatus() {
+  String body = "{\"deviceName\":\"M5NanoC6\",\"deviceId\":\"" + deviceID + "\",\"firmware\":\"" FIRMWARE_VERSION "\",";
+  body += "\"network\":\"wifi\",\"networkConnected\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") + ",";
+  body += "\"ssid\":\"" + WiFi.SSID() + "\",\"ip\":\"" + WiFi.localIP().toString() + "\",";
+  body += "\"companionConnected\":" + String(companionClient.connected() ? "true" : "false") + ",";
+  body += "\"companion\":\"" + String(companionHost) + ":" + companionPort + "\",\"text\":\"\",";
+  body += "\"brightness\":" + String(brightness) + ",\"color\":{\"r\":" + String(tallyR) +
+    ",\"g\":" + String(tallyG) + ",\"b\":" + String(tallyB) + "},";
+  body += "\"buttonPressed\":" + String(buttonDown ? "true" : "false") +
+    ",\"uptimeSeconds\":" + String(millis() / 1000) + "}";
+  server.send(200, "application/json", body);
 }
 
 static void setupServer() {
   server.on("/", HTTP_GET, configPage);
   server.on("/api/settings", HTTP_GET, sendSettings);
+  server.on("/api/status", HTTP_GET, sendStatus);
   server.on("/api/settings", HTTP_POST, postSettings);
   server.on("/api/ir/nec", HTTP_POST, postIrNec);
   server.on("/api/radio", HTTP_GET, sendSettings);
