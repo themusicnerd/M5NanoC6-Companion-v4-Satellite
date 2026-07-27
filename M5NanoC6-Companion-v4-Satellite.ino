@@ -1,6 +1,6 @@
 /*
  * M5NanoC6 Companion v4 Satellite
- * Version 0.1.1
+ * Version 0.1.2
  *
  * Wi-Fi Companion satellite, button, full-range WS2812 RGB tally and NEC IR.
  * The ESP32-C6 802.15.4 capabilities are reported by the REST API so future
@@ -18,7 +18,7 @@
 #include <esp_mac.h>
 #include <esp32-hal-rmt.h>
 
-#define FIRMWARE_VERSION "0.1.1"
+#define FIRMWARE_VERSION "0.1.2"
 #define BUTTON_PIN 9
 #define IR_TX_PIN 3
 #define RGB_POWER_PIN 19
@@ -40,10 +40,18 @@ bool tallyActive = false;
 bool companionConnected = false;
 bool buttonDown = false;
 bool holdHandled = false;
+bool configPortalActive = false;
 unsigned long buttonStarted = 0;
+unsigned long bootStarted = 0;
 unsigned long lastConnectTry = 0;
 unsigned long lastPing = 0;
+unsigned long lastLedFrame = 0;
 String receiveLine;
+WiFiManagerParameter *portalHost = nullptr;
+WiFiManagerParameter *portalPort = nullptr;
+
+const unsigned long apHoldMs = 5000;
+const unsigned long apBootWindowMs = 60000;
 
 static uint8_t scaleChannel(uint8_t value) {
   return (uint16_t(value) * constrain(brightness, 0, 100)) / 100;
@@ -55,10 +63,34 @@ static void showRgb(uint8_t r, uint8_t g, uint8_t b) {
 }
 
 static void renderLed() {
-  if (tallyActive) showRgb(tallyR, tallyG, tallyB);
-  else if (companionConnected) showRgb(0, 180, 0);
-  else if (WiFi.status() == WL_CONNECTED) showRgb(0, 0, 180);
-  else showRgb(180, 70, 0);
+  if (configPortalActive) return;
+  if (WiFi.status() != WL_CONNECTED || !companionClient.connected()) {
+    if ((millis() / 500) & 1) showRgb(255, 0, 0);
+    else showRgb(0, 0, 255);
+  } else if (tallyActive) showRgb(tallyR, tallyG, tallyB);
+  else showRgb(0, 180, 0);
+}
+
+static void updateLedAnimation() {
+  if (millis() - lastLedFrame < 40) return;
+  lastLedFrame = millis();
+  if (!configPortalActive) {
+    renderLed();
+    return;
+  }
+
+  const uint8_t position = (millis() / 12) & 0xff;
+  uint8_t r, g, b;
+  if (position < 85) {
+    r = 255 - position * 3; g = position * 3; b = 0;
+  } else if (position < 170) {
+    const uint8_t p = position - 85;
+    r = 0; g = 255 - p * 3; b = p * 3;
+  } else {
+    const uint8_t p = position - 170;
+    r = p * 3; g = 0; b = 255 - p * 3;
+  }
+  showRgb(r, g, b);
 }
 
 static String jsonValue(const String &body, const char *key) {
@@ -205,6 +237,8 @@ static void sendStatus() {
   body += "\"brightness\":" + String(brightness) + ",\"color\":{\"r\":" + String(tallyR) +
     ",\"g\":" + String(tallyG) + ",\"b\":" + String(tallyB) + "},";
   body += "\"buttonPressed\":" + String(buttonDown ? "true" : "false") +
+    ",\"setupMode\":" + String(configPortalActive ? "true" : "false") +
+    ",\"setupWindowOpen\":" + String(millis() - bootStarted <= apBootWindowMs ? "true" : "false") +
     ",\"uptimeSeconds\":" + String(millis() / 1000) + "}";
   server.send(200, "application/json", body);
 }
@@ -222,17 +256,27 @@ static void setupServer() {
   server.begin();
 }
 
-static void configPortal() {
-  showRgb(255, 70, 0);
-  WiFiManagerParameter host("companionIP", "Companion IP", companionHost, 63);
-  WiFiManagerParameter port("companionPort", "Satellite port", companionPort, 5);
-  wifiManager.addParameter(&host);
-  wifiManager.addParameter(&port);
-  wifiManager.setConfigPortalTimeout(180);
-  wifiManager.startConfigPortal(deviceID.c_str());
-  strlcpy(companionHost, host.getValue(), sizeof(companionHost));
-  strlcpy(companionPort, port.getValue(), sizeof(companionPort));
+static void savePortalSettings() {
+  if (portalHost) strlcpy(companionHost, portalHost->getValue(), sizeof(companionHost));
+  if (portalPort) strlcpy(companionPort, portalPort->getValue(), sizeof(companionPort));
   saveSettings();
+}
+
+static void startConfigPortal() {
+  if (configPortalActive) return;
+  companionClient.stop();
+  tallyActive = false;
+  if (!portalHost) {
+    portalHost = new WiFiManagerParameter("companionIP", "Companion IP", companionHost, 63);
+    portalPort = new WiFiManagerParameter("companionPort", "Satellite port", companionPort, 5);
+    wifiManager.addParameter(portalHost);
+    wifiManager.addParameter(portalPort);
+    wifiManager.setSaveParamsCallback(savePortalSettings);
+  }
+  wifiManager.setConfigPortalBlocking(false);
+  wifiManager.startConfigPortal(deviceID.c_str());
+  configPortalActive = wifiManager.getConfigPortalActive();
+  updateLedAnimation();
 }
 
 static String companionSurfaceID() {
@@ -292,6 +336,7 @@ static void connectCompanion() {
 
 void setup() {
   Serial.begin(115200);
+  bootStarted = millis();
   pinMode(BUTTON_PIN, INPUT_PULLUP);
   pinMode(RGB_POWER_PIN, OUTPUT);
   digitalWrite(RGB_POWER_PIN, HIGH);
@@ -314,9 +359,9 @@ void setup() {
   updatePassword = preferences.getString("updatepass", "");
   preferences.end();
 
-  showRgb(255, 255, 255);
-  wifiManager.setConfigPortalTimeout(180);
-  if (!wifiManager.autoConnect(deviceID.c_str())) configPortal();
+  WiFi.mode(WIFI_STA);
+  WiFi.begin();
+  renderLed();
 
   ArduinoOTA.setHostname(deviceID.c_str());
   ArduinoOTA.setPassword("companion-satellite");
@@ -327,9 +372,17 @@ void setup() {
 }
 
 void loop() {
+  if (configPortalActive) {
+    wifiManager.process();
+    if (!wifiManager.getConfigPortalActive()) {
+      configPortalActive = false;
+      savePortalSettings();
+    }
+  }
   server.handleClient();
   ArduinoOTA.handle();
   connectCompanion();
+  updateLedAnimation();
 
   if (companionClient.connected()) {
     while (companionClient.available()) {
@@ -355,12 +408,14 @@ void loop() {
     if (companionClient.connected()) companionClient.println(
       "KEY-PRESS DEVICEID=" + companionSurfaceID() + " KEY=0 PRESSED=true");
   }
-  if (pressed && !holdHandled && millis() - buttonStarted >= 5000) {
+  const bool setupWindowOpen = millis() - bootStarted <= apBootWindowMs;
+  if (pressed && !holdHandled && setupWindowOpen &&
+      millis() - buttonStarted >= apHoldMs) {
     holdHandled = true;
     if (companionClient.connected()) companionClient.println(
       "KEY-PRESS DEVICEID=" + companionSurfaceID() + " KEY=0 PRESSED=false");
     companionClient.stop();
-    configPortal();
+    startConfigPortal();
   }
   if (!pressed && buttonDown) {
     buttonDown = false;

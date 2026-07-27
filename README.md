@@ -1,9 +1,9 @@
 # M5NanoC6 Companion v4 Satellite
 
-Version 0.1.1 firmware for using the M5Stack NanoC6 as a one-button Bitfocus
+Version 0.1.2 firmware for using the M5Stack NanoC6 as a one-button Bitfocus
 Companion v4 satellite.
 
-## Included in v0.1.1
+## Included in v0.1.2
 
 - Companion single-button surface (`KEY-PRESS`, `KEY-RELEASE`, RGB colour and brightness)
 - Full 0–255 WS2812 colour range; no Atom Matrix brightness safety cap
@@ -20,7 +20,7 @@ explicitly rather than implying that a radio network is active.
 
 ## Install
 
-Use `release/M5NanoC6-Companion-v4-Satellite-v0.1.1-factory.bin` for the first USB
+Use `release/M5NanoC6-Companion-v4-Satellite-v0.1.2-factory.bin` for the first USB
 installation. Hold the GPIO9 button while connecting USB-C to enter download
 mode.
 
@@ -48,6 +48,17 @@ and device ID are `M5NANOC6_<full Wi-Fi MAC>`.
 The dashboard at `http://DEVICE-IP:9999/` shows the device ID, Wi-Fi and
 Companion connection status, current IP, brightness, button state, most recent
 incoming colour, and other troubleshooting data. It refreshes every two seconds.
+
+### LED and setup behaviour
+
+- Alternating red and blue means Wi-Fi or Companion is disconnected.
+- A moving rainbow means the Wi-Fi/Companion setup AP is active.
+- Green means connected and waiting for tally data.
+- When connected, an incoming Companion colour becomes the LED tally colour.
+
+To open setup mode, hold the button for five seconds during the first 60
+seconds after boot. The firmware never opens an AP automatically, and holding
+the button after the first minute remains a normal Companion button press.
 
 ## Companion control API
 

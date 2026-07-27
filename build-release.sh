@@ -14,9 +14,9 @@ arduino-cli compile \
   "$project_dir"
 
 cp "$build_dir/$sketch.bin" \
-  "$release_dir/M5NanoC6-Companion-v4-Satellite-v0.1.1-upgrade.bin"
+  "$release_dir/M5NanoC6-Companion-v4-Satellite-v0.1.2-upgrade.bin"
 cp "$build_dir/$sketch.merged.bin" \
-  "$release_dir/M5NanoC6-Companion-v4-Satellite-v0.1.1-factory.bin"
+  "$release_dir/M5NanoC6-Companion-v4-Satellite-v0.1.2-factory.bin"
 (cd "$release_dir" && sha256sum \
-  ./M5NanoC6-Companion-v4-Satellite-v0.1.1-factory.bin \
-  ./M5NanoC6-Companion-v4-Satellite-v0.1.1-upgrade.bin > SHA256SUMS-v0.1.1)
+  ./M5NanoC6-Companion-v4-Satellite-v0.1.2-factory.bin \
+  ./M5NanoC6-Companion-v4-Satellite-v0.1.2-upgrade.bin > SHA256SUMS-v0.1.2)
