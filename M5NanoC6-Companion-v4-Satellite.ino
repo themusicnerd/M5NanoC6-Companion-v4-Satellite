@@ -1,6 +1,6 @@
 /*
  * M5NanoC6 Companion v4 Satellite
- * Version 0.1.0
+ * Version 0.1.1
  *
  * Wi-Fi Companion satellite, button, full-range WS2812 RGB tally and NEC IR.
  * The ESP32-C6 802.15.4 capabilities are reported by the REST API so future
@@ -18,7 +18,7 @@
 #include <esp_mac.h>
 #include <esp32-hal-rmt.h>
 
-#define FIRMWARE_VERSION "0.1.0"
+#define FIRMWARE_VERSION "0.1.1"
 #define BUTTON_PIN 9
 #define IR_TX_PIN 3
 #define RGB_POWER_PIN 19
@@ -235,9 +235,14 @@ static void configPortal() {
   saveSettings();
 }
 
+static String companionSurfaceID() {
+  return "m5nano-c6:" + deviceID.substring(deviceID.length() - 5);
+}
+
 static void sendDeviceAdd() {
-  companionClient.print("DEVICE-ADD DEVICEID=" + deviceID +
-    " PRODUCT_NAME=\"M5NanoC6\" KEYS_TOTAL=1 BITMAPS=0 COLORS=rgb TEXT=false\n");
+  companionClient.println("ADD-DEVICE DEVICEID=" + companionSurfaceID() +
+    " PRODUCT_NAME=\"M5NanoC6\" KEYS_TOTAL=1 KEYS_PER_ROW=1 "
+    "BITMAPS=0 COLORS=rgb TEXT=false");
 }
 
 static void handleKeyState(const String &line) {
@@ -347,18 +352,21 @@ void loop() {
     buttonDown = true;
     holdHandled = false;
     buttonStarted = millis();
-    if (companionClient.connected()) companionClient.print("KEY-PRESS DEVICEID=" + deviceID + " KEY=0\n");
+    if (companionClient.connected()) companionClient.println(
+      "KEY-PRESS DEVICEID=" + companionSurfaceID() + " KEY=0 PRESSED=true");
   }
   if (pressed && !holdHandled && millis() - buttonStarted >= 5000) {
     holdHandled = true;
-    if (companionClient.connected()) companionClient.print("KEY-RELEASE DEVICEID=" + deviceID + " KEY=0\n");
+    if (companionClient.connected()) companionClient.println(
+      "KEY-PRESS DEVICEID=" + companionSurfaceID() + " KEY=0 PRESSED=false");
     companionClient.stop();
     configPortal();
   }
   if (!pressed && buttonDown) {
     buttonDown = false;
     if (!holdHandled && companionClient.connected())
-      companionClient.print("KEY-RELEASE DEVICEID=" + deviceID + " KEY=0\n");
+      companionClient.println(
+        "KEY-PRESS DEVICEID=" + companionSurfaceID() + " KEY=0 PRESSED=false");
   }
   delay(2);
 }
