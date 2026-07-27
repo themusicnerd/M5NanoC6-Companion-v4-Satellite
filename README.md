@@ -1,13 +1,13 @@
 # M5NanoC6 Companion v4 Satellite
 
-Version 0.1.3 firmware for using the M5Stack NanoC6 as a one-button Bitfocus
+Version 0.1.4 firmware for using the M5Stack NanoC6 as a one-button Bitfocus
 Companion v4 satellite.
 
-## Included in v0.1.3
+## Included in v0.1.4
 
 - Companion single-button surface (`KEY-PRESS`, `KEY-RELEASE`, RGB colour and brightness)
 - Full 0–255 WS2812 colour range; no Atom Matrix brightness safety cap
-- WiFiManager setup (hold the button for five seconds)
+- WiFiManager setup (hold the button for five seconds during the first minute)
 - Browser and Arduino OTA firmware updates
 - NEC infrared transmission through `POST /api/ir/nec`
 - ESP32-C6 802.15.4 capability discovery for Zigbee, Thread and Matter
@@ -20,7 +20,7 @@ explicitly rather than implying that a radio network is active.
 
 ## Install
 
-Use `release/M5NanoC6-Companion-v4-Satellite-v0.1.3-factory.bin` for the first USB
+Use `release/M5NanoC6-Companion-v4-Satellite-v0.1.4-factory.bin` for the first USB
 installation. Hold the GPIO9 button while connecting USB-C to enter download
 mode.
 
@@ -52,14 +52,15 @@ incoming colour, and other troubleshooting data. It refreshes every two seconds.
 ### LED and setup behaviour
 
 - Alternating red and blue means Wi-Fi or Companion is disconnected.
-- A moving rainbow means the Wi-Fi/Companion setup AP is active.
+- A fast blue flash means the Wi-Fi/Companion setup AP is active.
 - Green means connected and waiting for tally data.
 - When connected, an incoming Companion colour becomes the LED tally colour.
 
-To open setup mode, hold the button while powering on or restarting the
-NanoC6, matching the AtomS3 boot-menu gesture. The firmware never opens an AP
-automatically. Once normal boot has started, the button is only a Companion
-surface button.
+GPIO9 is also the NanoC6 download-mode strap, so holding it while applying power
+starts the serial bootloader rather than the firmware. To open setup mode, power
+up normally, then hold the button for five seconds during the first 60 seconds.
+The setup AP is named `M5NANOC6_<full Wi-Fi MAC>`. After the first minute, the
+button operates only as a Companion surface button.
 
 ## Companion control API
 

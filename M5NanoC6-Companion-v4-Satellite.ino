@@ -1,6 +1,6 @@
 /*
  * M5NanoC6 Companion v4 Satellite
- * Version 0.1.3
+ * Version 0.1.4
  *
  * Wi-Fi Companion satellite, button, full-range WS2812 RGB tally and NEC IR.
  * The ESP32-C6 802.15.4 capabilities are reported by the REST API so future
@@ -18,7 +18,7 @@
 #include <esp_mac.h>
 #include <esp32-hal-rmt.h>
 
-#define FIRMWARE_VERSION "0.1.3"
+#define FIRMWARE_VERSION "0.1.4"
 #define BUTTON_PIN 9
 #define IR_TX_PIN 3
 #define RGB_POWER_PIN 19
@@ -43,6 +43,10 @@ bool configPortalActive = false;
 unsigned long lastConnectTry = 0;
 unsigned long lastPing = 0;
 unsigned long lastLedFrame = 0;
+unsigned long setupButtonPressedAt = 0;
+const unsigned long setupGestureWindowMs = 60000;
+const unsigned long setupGestureHoldMs = 5000;
+bool setupGestureHandled = false;
 String receiveLine;
 WiFiManagerParameter *portalHost = nullptr;
 WiFiManagerParameter *portalPort = nullptr;
@@ -66,25 +70,16 @@ static void renderLed() {
 }
 
 static void updateLedAnimation() {
-  if (millis() - lastLedFrame < 40) return;
+  const unsigned long frameInterval = configPortalActive ? 100 : 40;
+  if (millis() - lastLedFrame < frameInterval) return;
   lastLedFrame = millis();
   if (!configPortalActive) {
     renderLed();
     return;
   }
 
-  const uint8_t position = (millis() / 12) & 0xff;
-  uint8_t r, g, b;
-  if (position < 85) {
-    r = 255 - position * 3; g = position * 3; b = 0;
-  } else if (position < 170) {
-    const uint8_t p = position - 85;
-    r = 0; g = 255 - p * 3; b = p * 3;
-  } else {
-    const uint8_t p = position - 170;
-    r = p * 3; g = 0; b = 255 - p * 3;
-  }
-  showRgb(r, g, b);
+  if ((millis() / 100) & 1) showRgb(0, 0, 255);
+  else showRgb(0, 0, 0);
 }
 
 static String jsonValue(const String &body, const char *key) {
@@ -257,6 +252,7 @@ static void savePortalSettings() {
 
 static void startConfigPortal() {
   if (configPortalActive) return;
+  Serial.println("[Setup] Starting Wi-Fi configuration AP: " + deviceID);
   companionClient.stop();
   tallyActive = false;
   if (!portalHost) {
@@ -267,8 +263,11 @@ static void startConfigPortal() {
     wifiManager.setSaveParamsCallback(savePortalSettings);
   }
   wifiManager.setConfigPortalBlocking(false);
-  wifiManager.startConfigPortal(deviceID.c_str());
+  configPortalActive = true;
+  const bool started = wifiManager.startConfigPortal(deviceID.c_str());
   configPortalActive = wifiManager.getConfigPortalActive();
+  Serial.printf("[Setup] AP start returned %s; portal active: %s\n",
+    started ? "true" : "false", configPortalActive ? "true" : "false");
   updateLedAnimation();
 }
 
@@ -352,8 +351,7 @@ void setup() {
   preferences.end();
 
   WiFi.mode(WIFI_STA);
-  if (digitalRead(BUTTON_PIN) == LOW) startConfigPortal();
-  else WiFi.begin();
+  WiFi.begin();
   renderLed();
 
   ArduinoOTA.setHostname(deviceID.c_str());
@@ -394,6 +392,34 @@ void loop() {
   }
 
   bool pressed = digitalRead(BUTTON_PIN) == LOW;
+  const unsigned long now = millis();
+  const bool setupWindowOpen = now <= setupGestureWindowMs;
+
+  if (!configPortalActive && !setupGestureHandled && setupWindowOpen) {
+    if (pressed) {
+      if (setupButtonPressedAt == 0) setupButtonPressedAt = now;
+      if (now - setupButtonPressedAt >= setupGestureHoldMs) {
+        setupGestureHandled = true;
+        if (buttonDown && companionClient.connected()) {
+          companionClient.println(
+            "KEY-PRESS DEVICEID=" + companionSurfaceID() + " KEY=0 PRESSED=false");
+        }
+        buttonDown = false;
+        startConfigPortal();
+        delay(2);
+        return;
+      }
+    } else {
+      setupButtonPressedAt = 0;
+    }
+  }
+
+  if (configPortalActive) {
+    buttonDown = pressed;
+    delay(2);
+    return;
+  }
+
   if (pressed && !buttonDown) {
     buttonDown = true;
     if (companionClient.connected()) companionClient.println(
