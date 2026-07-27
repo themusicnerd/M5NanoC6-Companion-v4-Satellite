@@ -1,6 +1,6 @@
 /*
  * M5NanoC6 Companion v4 Satellite
- * Version 0.1.0
+ * Version 0.1.3
  *
  * Wi-Fi Companion satellite, button, full-range WS2812 RGB tally and NEC IR.
  * The ESP32-C6 802.15.4 capabilities are reported by the REST API so future
@@ -18,7 +18,7 @@
 #include <esp_mac.h>
 #include <esp32-hal-rmt.h>
 
-#define FIRMWARE_VERSION "0.1.0"
+#define FIRMWARE_VERSION "0.1.3"
 #define BUTTON_PIN 9
 #define IR_TX_PIN 3
 #define RGB_POWER_PIN 19
@@ -39,11 +39,13 @@ uint8_t tallyR = 0, tallyG = 0, tallyB = 0;
 bool tallyActive = false;
 bool companionConnected = false;
 bool buttonDown = false;
-bool holdHandled = false;
-unsigned long buttonStarted = 0;
+bool configPortalActive = false;
 unsigned long lastConnectTry = 0;
 unsigned long lastPing = 0;
+unsigned long lastLedFrame = 0;
 String receiveLine;
+WiFiManagerParameter *portalHost = nullptr;
+WiFiManagerParameter *portalPort = nullptr;
 
 static uint8_t scaleChannel(uint8_t value) {
   return (uint16_t(value) * constrain(brightness, 0, 100)) / 100;
@@ -55,10 +57,34 @@ static void showRgb(uint8_t r, uint8_t g, uint8_t b) {
 }
 
 static void renderLed() {
-  if (tallyActive) showRgb(tallyR, tallyG, tallyB);
-  else if (companionConnected) showRgb(0, 180, 0);
-  else if (WiFi.status() == WL_CONNECTED) showRgb(0, 0, 180);
-  else showRgb(180, 70, 0);
+  if (configPortalActive) return;
+  if (WiFi.status() != WL_CONNECTED || !companionClient.connected()) {
+    if ((millis() / 500) & 1) showRgb(255, 0, 0);
+    else showRgb(0, 0, 255);
+  } else if (tallyActive) showRgb(tallyR, tallyG, tallyB);
+  else showRgb(0, 180, 0);
+}
+
+static void updateLedAnimation() {
+  if (millis() - lastLedFrame < 40) return;
+  lastLedFrame = millis();
+  if (!configPortalActive) {
+    renderLed();
+    return;
+  }
+
+  const uint8_t position = (millis() / 12) & 0xff;
+  uint8_t r, g, b;
+  if (position < 85) {
+    r = 255 - position * 3; g = position * 3; b = 0;
+  } else if (position < 170) {
+    const uint8_t p = position - 85;
+    r = 0; g = 255 - p * 3; b = p * 3;
+  } else {
+    const uint8_t p = position - 170;
+    r = p * 3; g = 0; b = 255 - p * 3;
+  }
+  showRgb(r, g, b);
 }
 
 static String jsonValue(const String &body, const char *key) {
@@ -185,14 +211,35 @@ static void updateResult() {
 
 static void configPage() {
   server.send(200, "text/html",
-    "<!doctype html><meta name=viewport content='width=device-width'><h1>" + deviceID + "</h1>"
-    "<p>Firmware v" FIRMWARE_VERSION "</p><p>Companion: " + String(companionHost) + ":" + String(companionPort) +
-    "</p><p><a href=/update>Firmware update</a></p>");
+    "<!doctype html><meta name=viewport content='width=device-width'><title>M5NanoC6</title>"
+    "<h1>M5NanoC6 Companion Satellite</h1><p>Device ID: <code>" + deviceID + "</code></p>"
+    "<p>Firmware v" FIRMWARE_VERSION "</p><h3>Live troubleshooting status</h3><div id=s>Loading...</div>"
+    "<p>Incoming text: <code id=t>(not supported)</code></p>"
+    "<p>Incoming colour: <span id=w style='display:inline-block;width:2em;height:1em;border:1px solid'></span> <code id=c>-</code></p>"
+    "<p><a href=/update>Firmware update</a></p><pre id=j></pre><script>async function u(){try{let x=await(await fetch('/api/status')).json();"
+    "s.textContent=(x.networkConnected?'Network connected':'Network disconnected')+' | '+(x.companionConnected?'Companion connected':'Companion disconnected')+' | '+x.ip;"
+    "let q=x.color;c.textContent=`rgb(${q.r}, ${q.g}, ${q.b})`;w.style.background=`rgb(${q.r},${q.g},${q.b})`;j.textContent=JSON.stringify(x,null,2)"
+    "}catch(e){s.textContent='Status unavailable'}}u();setInterval(u,2000)</script>");
+}
+
+static void sendStatus() {
+  String body = "{\"deviceName\":\"M5NanoC6\",\"deviceId\":\"" + deviceID + "\",\"firmware\":\"" FIRMWARE_VERSION "\",";
+  body += "\"network\":\"wifi\",\"networkConnected\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") + ",";
+  body += "\"ssid\":\"" + WiFi.SSID() + "\",\"ip\":\"" + WiFi.localIP().toString() + "\",";
+  body += "\"companionConnected\":" + String(companionClient.connected() ? "true" : "false") + ",";
+  body += "\"companion\":\"" + String(companionHost) + ":" + companionPort + "\",\"text\":\"\",";
+  body += "\"brightness\":" + String(brightness) + ",\"color\":{\"r\":" + String(tallyR) +
+    ",\"g\":" + String(tallyG) + ",\"b\":" + String(tallyB) + "},";
+  body += "\"buttonPressed\":" + String(buttonDown ? "true" : "false") +
+    ",\"setupMode\":" + String(configPortalActive ? "true" : "false") +
+    ",\"uptimeSeconds\":" + String(millis() / 1000) + "}";
+  server.send(200, "application/json", body);
 }
 
 static void setupServer() {
   server.on("/", HTTP_GET, configPage);
   server.on("/api/settings", HTTP_GET, sendSettings);
+  server.on("/api/status", HTTP_GET, sendStatus);
   server.on("/api/settings", HTTP_POST, postSettings);
   server.on("/api/ir/nec", HTTP_POST, postIrNec);
   server.on("/api/radio", HTTP_GET, sendSettings);
@@ -202,22 +249,37 @@ static void setupServer() {
   server.begin();
 }
 
-static void configPortal() {
-  showRgb(255, 70, 0);
-  WiFiManagerParameter host("companionIP", "Companion IP", companionHost, 63);
-  WiFiManagerParameter port("companionPort", "Satellite port", companionPort, 5);
-  wifiManager.addParameter(&host);
-  wifiManager.addParameter(&port);
-  wifiManager.setConfigPortalTimeout(180);
-  wifiManager.startConfigPortal(deviceID.c_str());
-  strlcpy(companionHost, host.getValue(), sizeof(companionHost));
-  strlcpy(companionPort, port.getValue(), sizeof(companionPort));
+static void savePortalSettings() {
+  if (portalHost) strlcpy(companionHost, portalHost->getValue(), sizeof(companionHost));
+  if (portalPort) strlcpy(companionPort, portalPort->getValue(), sizeof(companionPort));
   saveSettings();
 }
 
+static void startConfigPortal() {
+  if (configPortalActive) return;
+  companionClient.stop();
+  tallyActive = false;
+  if (!portalHost) {
+    portalHost = new WiFiManagerParameter("companionIP", "Companion IP", companionHost, 63);
+    portalPort = new WiFiManagerParameter("companionPort", "Satellite port", companionPort, 5);
+    wifiManager.addParameter(portalHost);
+    wifiManager.addParameter(portalPort);
+    wifiManager.setSaveParamsCallback(savePortalSettings);
+  }
+  wifiManager.setConfigPortalBlocking(false);
+  wifiManager.startConfigPortal(deviceID.c_str());
+  configPortalActive = wifiManager.getConfigPortalActive();
+  updateLedAnimation();
+}
+
+static String companionSurfaceID() {
+  return "m5nano-c6:" + deviceID.substring(deviceID.length() - 5);
+}
+
 static void sendDeviceAdd() {
-  companionClient.print("DEVICE-ADD DEVICEID=" + deviceID +
-    " PRODUCT_NAME=\"M5NanoC6\" KEYS_TOTAL=1 BITMAPS=0 COLORS=rgb TEXT=false\n");
+  companionClient.println("ADD-DEVICE DEVICEID=" + companionSurfaceID() +
+    " PRODUCT_NAME=\"M5NanoC6\" KEYS_TOTAL=1 KEYS_PER_ROW=1 "
+    "BITMAPS=0 COLORS=rgb TEXT=false");
 }
 
 static void handleKeyState(const String &line) {
@@ -289,9 +351,10 @@ void setup() {
   updatePassword = preferences.getString("updatepass", "");
   preferences.end();
 
-  showRgb(255, 255, 255);
-  wifiManager.setConfigPortalTimeout(180);
-  if (!wifiManager.autoConnect(deviceID.c_str())) configPortal();
+  WiFi.mode(WIFI_STA);
+  if (digitalRead(BUTTON_PIN) == LOW) startConfigPortal();
+  else WiFi.begin();
+  renderLed();
 
   ArduinoOTA.setHostname(deviceID.c_str());
   ArduinoOTA.setPassword("companion-satellite");
@@ -302,9 +365,17 @@ void setup() {
 }
 
 void loop() {
+  if (configPortalActive) {
+    wifiManager.process();
+    if (!wifiManager.getConfigPortalActive()) {
+      configPortalActive = false;
+      savePortalSettings();
+    }
+  }
   server.handleClient();
   ArduinoOTA.handle();
   connectCompanion();
+  updateLedAnimation();
 
   if (companionClient.connected()) {
     while (companionClient.available()) {
@@ -325,20 +396,14 @@ void loop() {
   bool pressed = digitalRead(BUTTON_PIN) == LOW;
   if (pressed && !buttonDown) {
     buttonDown = true;
-    holdHandled = false;
-    buttonStarted = millis();
-    if (companionClient.connected()) companionClient.print("KEY-PRESS DEVICEID=" + deviceID + " KEY=0\n");
-  }
-  if (pressed && !holdHandled && millis() - buttonStarted >= 5000) {
-    holdHandled = true;
-    if (companionClient.connected()) companionClient.print("KEY-RELEASE DEVICEID=" + deviceID + " KEY=0\n");
-    companionClient.stop();
-    configPortal();
+    if (companionClient.connected()) companionClient.println(
+      "KEY-PRESS DEVICEID=" + companionSurfaceID() + " KEY=0 PRESSED=true");
   }
   if (!pressed && buttonDown) {
     buttonDown = false;
-    if (!holdHandled && companionClient.connected())
-      companionClient.print("KEY-RELEASE DEVICEID=" + deviceID + " KEY=0\n");
+    if (companionClient.connected())
+      companionClient.println(
+        "KEY-PRESS DEVICEID=" + companionSurfaceID() + " KEY=0 PRESSED=false");
   }
   delay(2);
 }
