@@ -1,6 +1,6 @@
 /*
  * M5NanoC6 Companion v4 Satellite
- * Version 0.1.6
+ * Version 0.1.7
  *
  * Wi-Fi Companion satellite, button, full-range WS2812 RGB tally and NEC IR.
  * The ESP32-C6 802.15.4 capabilities are reported by the REST API so future
@@ -18,7 +18,7 @@
 #include <esp_mac.h>
 #include <esp32-hal-rmt.h>
 
-#define FIRMWARE_VERSION "0.1.6"
+#define FIRMWARE_VERSION "0.1.7"
 #define BUTTON_PIN 9
 #define IR_TX_PIN 3
 #define RGB_POWER_PIN 19
@@ -34,7 +34,10 @@ char companionHost[64] = "Companion IP";
 char companionPort[6] = "16622";
 String deviceID;
 String updatePassword;
+String configuredDeviceName;
+String serialProvisionBuffer;
 int brightness = 100;
+bool ledEnabled = true;
 uint8_t tallyR = 0, tallyG = 0, tallyB = 0;
 bool tallyActive = false;
 bool companionConnected = false;
@@ -44,6 +47,7 @@ bool mdnsStarted = false;
 unsigned long lastConnectTry = 0;
 unsigned long lastPing = 0;
 unsigned long lastLedFrame = 0;
+unsigned long hardwareTestUntil = 0;
 unsigned long setupButtonPressedAt = 0;
 const unsigned long setupGestureWindowMs = 60000;
 const unsigned long setupGestureHoldMs = 5000;
@@ -57,13 +61,15 @@ static uint8_t scaleChannel(uint8_t value) {
 }
 
 static void showRgb(uint8_t r, uint8_t g, uint8_t b) {
+  if (!ledEnabled) r = g = b = 0;
   rgb.setPixelColor(0, rgb.Color(scaleChannel(r), scaleChannel(g), scaleChannel(b)));
   rgb.show();
 }
 
 static void renderLed() {
   if (configPortalActive) return;
-  if (WiFi.status() != WL_CONNECTED || !companionClient.connected()) {
+  if (millis() < hardwareTestUntil) showRgb(tallyR, tallyG, tallyB);
+  else if (WiFi.status() != WL_CONNECTED || !companionClient.connected()) {
     if ((millis() / 500) & 1) showRgb(255, 0, 0);
     else showRgb(0, 0, 255);
   } else if (tallyActive) showRgb(tallyR, tallyG, tallyB);
@@ -111,12 +117,14 @@ static void saveSettings() {
   preferences.putString("host", companionHost);
   preferences.putString("port", companionPort);
   preferences.putInt("brightness", brightness);
+  preferences.putBool("ledEnabled", ledEnabled);
+  preferences.putString("deviceName", configuredDeviceName);
   preferences.end();
 }
 
 static void sendSettings() {
   String body = "{\"device\":\"M5NanoC6\",\"firmware\":\"" FIRMWARE_VERSION "\",";
-  body += "\"brightness\":" + String(brightness) + ",";
+  body += "\"brightness\":" + String(brightness) + ",\"ledEnabled\":" + String(ledEnabled ? "true" : "false") + ",";
   body += "\"ir\":{\"supported\":true,\"protocols\":[\"NEC\"]},";
   body += "\"radio\":{\"hardware\":\"802.15.4\",\"zigbee\":\"profile-required\",";
   body += "\"thread\":\"profile-required\",\"matter\":\"profile-required\"}}";
@@ -124,13 +132,40 @@ static void sendSettings() {
 }
 
 static void postSettings() {
-  String value = jsonValue(server.arg("plain"), "brightness");
+  const String body = server.arg("plain");
+  String value = jsonValue(body, "brightness");
   if (value.length()) {
     brightness = constrain(value.toInt(), 0, 100);
-    saveSettings();
-    renderLed();
   }
+  const String ledValue = jsonValue(body, "ledEnabled");
+  if (ledValue.length()) ledEnabled = ledValue == "true";
+  saveSettings();
+  renderLed();
   sendSettings();
+}
+
+static void handleSerialProvisioning() {
+  while (Serial.available()) {
+    const char c = Serial.read();
+    if (c == '\n') {
+      serialProvisionBuffer.trim();
+      if (serialProvisionBuffer.startsWith("PROVISION ")) {
+        const String body = serialProvisionBuffer.substring(10);
+        const String ssid = jsonValue(body, "ssid"), password = jsonValue(body, "password");
+        const String host = jsonValue(body, "companionHost"), port = jsonValue(body, "companionPort"), name = jsonValue(body, "deviceName");
+        if (port.length() && (port.toInt() < 1 || port.toInt() > 65535)) Serial.println("PROVISION-ERROR invalid companionPort");
+        else {
+          if (host.length()) strlcpy(companionHost, host.c_str(), sizeof(companionHost));
+          if (port.length()) strlcpy(companionPort, port.c_str(), sizeof(companionPort));
+          if (name.length()) configuredDeviceName = name.substring(0, 48);
+          saveSettings();
+          Serial.println("PROVISION-OK");
+          if (ssid.length()) { delay(100); WiFi.persistent(true); WiFi.begin(ssid.c_str(), password.c_str()); }
+        }
+      }
+      serialProvisionBuffer = "";
+    } else if (c != '\r' && serialProvisionBuffer.length() < 512) serialProvisionBuffer += c;
+  }
 }
 
 static String requestValue(const char *key) {
@@ -255,6 +290,20 @@ static void postRadio() {
     "\"profiles\":[\"zigbee\",\"thread-matter\"]}");
 }
 
+static void postHardwareTest() {
+  const String value = jsonValue(server.arg("plain"), "value");
+  if (value == "red") { tallyR = 255; tallyG = 0; tallyB = 0; }
+  else if (value == "green") { tallyR = 0; tallyG = 255; tallyB = 0; }
+  else if (value == "blue") { tallyR = 0; tallyG = 0; tallyB = 255; }
+  else if (value == "white") { tallyR = tallyG = tallyB = 255; }
+  else if (value == "off") { tallyR = tallyG = tallyB = 0; }
+  else { server.send(400, "text/plain", "value must be red, green, blue, white, or off"); return; }
+  tallyActive = tallyR || tallyG || tallyB;
+  hardwareTestUntil = millis() + 5000;
+  showRgb(tallyR, tallyG, tallyB);
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
 static void updatePage() {
   if (!requireAuth()) return;
   server.send(200, "text/html",
@@ -286,19 +335,21 @@ static void configPage() {
     "<p>Firmware v" FIRMWARE_VERSION "</p><h3>Live troubleshooting status</h3><div id=s>Loading...</div>"
     "<p>Incoming text: <code id=t>(not supported)</code></p>"
     "<p>Incoming colour: <span id=w style='display:inline-block;width:2em;height:1em;border:1px solid'></span> <code id=c>-</code></p>"
-    "<p><a href=/update>Firmware update</a></p><pre id=j></pre><script>async function u(){try{let x=await(await fetch('/api/status')).json();"
+    "<p><label><input id=le type=checkbox> RGB LED enabled</label> <button onclick=e()>Save LED</button></p>"
+    "<p>Button: <strong id=bt>released</strong></p><p>LED test: <button onclick=tst('red')>Red</button> <button onclick=tst('green')>Green</button> <button onclick=tst('blue')>Blue</button> <button onclick=tst('white')>White</button> <button onclick=tst('off')>Off</button></p>"
+    "<p><a href=/update>Firmware update</a></p><pre id=j></pre><script>async function e(){let r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ledEnabled:le.checked})});j.textContent=await r.text()}async function tst(value){let r=await fetch('/api/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:'led',value})});j.textContent=await r.text()}async function u(){try{let x=await(await fetch('/api/status')).json();"
     "s.textContent=(x.networkConnected?'Network connected':'Network disconnected')+' | '+(x.companionConnected?'Companion connected':'Companion disconnected')+' | '+x.ip;"
-    "let q=x.color;c.textContent=`rgb(${q.r}, ${q.g}, ${q.b})`;w.style.background=`rgb(${q.r},${q.g},${q.b})`;j.textContent=JSON.stringify(x,null,2)"
+    "le.checked=x.ledEnabled;bt.textContent=x.buttonPressed?'PRESSED':'released';let q=x.color;c.textContent=`rgb(${q.r}, ${q.g}, ${q.b})`;w.style.background=`rgb(${q.r},${q.g},${q.b})`;j.textContent=JSON.stringify(x,null,2)"
     "}catch(e){s.textContent='Status unavailable'}}u();setInterval(u,2000)</script>");
 }
 
 static void sendStatus() {
-  String body = "{\"deviceName\":\"M5NanoC6\",\"deviceId\":\"" + deviceID + "\",\"firmware\":\"" FIRMWARE_VERSION "\",";
+  String body = "{\"deviceName\":\"" + (configuredDeviceName.length() ? configuredDeviceName : "M5NanoC6") + "\",\"deviceId\":\"" + deviceID + "\",\"firmware\":\"" FIRMWARE_VERSION "\",";
   body += "\"network\":\"wifi\",\"networkConnected\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") + ",";
   body += "\"ssid\":\"" + WiFi.SSID() + "\",\"ip\":\"" + WiFi.localIP().toString() + "\",";
   body += "\"companionConnected\":" + String(companionClient.connected() ? "true" : "false") + ",";
   body += "\"companion\":\"" + String(companionHost) + ":" + companionPort + "\",\"text\":\"\",";
-  body += "\"brightness\":" + String(brightness) + ",\"color\":{\"r\":" + String(tallyR) +
+  body += "\"brightness\":" + String(brightness) + ",\"ledEnabled\":" + String(ledEnabled ? "true" : "false") + ",\"color\":{\"r\":" + String(tallyR) +
     ",\"g\":" + String(tallyG) + ",\"b\":" + String(tallyB) + "},";
   body += "\"buttonPressed\":" + String(buttonDown ? "true" : "false") +
     ",\"setupMode\":" + String(configPortalActive ? "true" : "false") +
@@ -320,6 +371,7 @@ static void setupServer() {
   server.on("/api/ir/nec", HTTP_POST, postIrNec);
   server.on("/api/radio", HTTP_GET, sendSettings);
   server.on("/api/radio", HTTP_POST, postRadio);
+  server.on("/api/test", HTTP_POST, postHardwareTest);
   server.on("/update", HTTP_GET, updatePage);
   server.on("/update", HTTP_POST, updateResult, updateUpload);
   server.begin();
@@ -418,8 +470,10 @@ static void handleApiLine(String line) {
     int first = line.indexOf(' ');
     if (first >= 0) handleKeyState("KEY-STATE COLOR=" + line.substring(first + 1));
   } else if (line.startsWith("BRIGHTNESS")) {
-    int equals = line.indexOf('=');
-    brightness = constrain((equals >= 0 ? line.substring(equals + 1) : line.substring(10)).toInt(), 0, 100);
+    int valuePos = line.indexOf("VALUE=");
+    String value = valuePos >= 0 ? line.substring(valuePos + 6) : line.substring(10);
+    value.trim();
+    brightness = constrain(value.toInt(), 0, 100);
     saveSettings();
     renderLed();
   } else if (line == "PING") companionClient.print("PONG\n");
@@ -458,6 +512,8 @@ void setup() {
   strlcpy(companionHost, preferences.getString("host", "Companion IP").c_str(), sizeof(companionHost));
   strlcpy(companionPort, preferences.getString("port", "16622").c_str(), sizeof(companionPort));
   brightness = preferences.getInt("brightness", 100);
+  ledEnabled = preferences.getBool("ledEnabled", true);
+  configuredDeviceName = preferences.getString("deviceName", "");
   updatePassword = preferences.getString("updatepass", "");
   preferences.end();
 
@@ -483,6 +539,7 @@ void loop() {
     }
   }
   server.handleClient();
+  handleSerialProvisioning();
   ArduinoOTA.handle();
   ensureMDNS();
   connectCompanion();

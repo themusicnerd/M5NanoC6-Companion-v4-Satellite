@@ -1,11 +1,12 @@
 # M5NanoC6 Companion v4 Satellite
 
-Version 0.1.6 firmware for using the M5Stack NanoC6 as a one-button Bitfocus
+Version 0.1.7 firmware for using the M5Stack NanoC6 as a one-button Bitfocus
 Companion v4 satellite.
 
-## Included in v0.1.6
+## Included in v0.1.7
 
 - Companion single-button surface (`KEY-PRESS`, `KEY-RELEASE`, RGB colour and brightness)
+- Correct parsing of Companion's device-scoped `BRIGHTNESS VALUE=` messages
 - Full 0–255 WS2812 colour range; no Atom Matrix brightness safety cap
 - WiFiManager setup (hold the button for five seconds during the first minute)
 - Companion surface discovery via `companion-satellite._tcp` mDNS
@@ -21,7 +22,7 @@ explicitly rather than implying that a radio network is active.
 
 ## Install
 
-Use `release/M5NanoC6-Companion-v4-Satellite-v0.1.6-factory.bin` for the first USB
+Use `release/M5NanoC6-Companion-v4-Satellite-v0.1.7-factory.bin` for the first USB
 installation. Hold the GPIO9 button while connecting USB-C to enter download
 mode.
 
@@ -62,6 +63,33 @@ starts the serial bootloader rather than the firmware. To open setup mode, power
 up normally, then hold the button for five seconds during the first 60 seconds.
 The setup AP is named `M5NANOC6_<full Wi-Fi MAC>`. After the first minute, the
 button operates only as a Companion surface button.
+
+### Change or reset the Wi-Fi connection
+
+1. Power the NanoC6 normally; do not hold GPIO9 while applying power.
+2. During the first 60 seconds after boot, hold the button for five seconds.
+3. Join the open `M5NANOC6_<full Wi-Fi MAC>` setup network.
+4. Open `http://192.168.4.1/` if the captive portal does not appear, choose a
+   Wi-Fi network, enter its password, and save.
+
+Saving replaces the stored Wi-Fi credentials. This is also the recovery path
+when the previous network no longer exists. The firmware does not currently
+provide a separate erase-only Wi-Fi gesture.
+
+### Companion discovery and one-click setup
+
+The NanoC6 advertises `_companion-satellite._tcp` on the local network. In
+Companion, open **Surfaces > Remote Surfaces**, find the NanoC6, select
+**+ Setup**, choose the address Companion should advertise, and confirm. Companion
+then sends its address and Satellite TCP port (`16622`) to the device through
+the REST API on port `9999`.
+
+The enable/disable switch used by devices such as Stream Deck Network Dock does
+not apply to Companion Satellite connections. Those devices are opened by a
+Companion surface-integration module; the NanoC6 initiates a Satellite API
+connection to Companion, so **+ Setup** is the expected claiming flow. Discovery
+requires both systems to share an mDNS broadcast domain, or the network to
+provide an mDNS reflector between VLANs.
 
 ## Companion control API
 
